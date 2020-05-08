@@ -7,9 +7,9 @@ use crate::{
     account_state_blob::AccountStateBlob,
     discovery_info::DiscoveryInfo,
     event::{EventHandle, EventKey},
-    move_resource::MoveResource,
 };
 use anyhow::{format_err, Error, Result};
+use move_core_types::move_resource::MoveResource;
 use once_cell::sync::Lazy;
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest_derive::Arbitrary;

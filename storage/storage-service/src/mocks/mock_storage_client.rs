@@ -16,7 +16,6 @@ use libra_types::{
     event::EventHandle,
     get_with_proof::{RequestItem, ResponseItem},
     ledger_info::{LedgerInfo, LedgerInfoWithSignatures},
-    move_resource::MoveResource,
     proof::{AccumulatorConsistencyProof, SparseMerkleProof, SparseMerkleRangeProof},
     proto::types::{
         request_item::RequestedItems, response_item::ResponseItems, AccountStateWithProof,
@@ -29,6 +28,7 @@ use libra_types::{
     transaction::{Transaction, Version},
     vm_error::StatusCode,
 };
+use move_core_types::move_resource::MoveResource;
 use rand::{
     rngs::{OsRng, StdRng},
     Rng, SeedableRng,
