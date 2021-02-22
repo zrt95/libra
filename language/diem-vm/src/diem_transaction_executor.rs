@@ -57,13 +57,13 @@ impl DiemVM {
 
     /// Generates a transaction output for a transaction that encountered errors during the
     /// execution process. This is public for now only for tests.
-    pub fn failed_transaction_cleanup(
+    pub fn failed_transaction_cleanup<R: RemoteCache>(
         &self,
         error_code: VMStatus,
         gas_schedule: &CostTable,
         gas_left: GasUnits<GasCarrier>,
         txn_data: &TransactionMetadata,
-        remote_cache: &StateViewCache<'_>,
+        remote_cache: &R,
         account_currency_symbol: &IdentStr,
         log_context: &impl LogContext,
     ) -> TransactionOutput {
@@ -79,13 +79,13 @@ impl DiemVM {
         .1
     }
 
-    fn failed_transaction_cleanup_and_keep_vm_status(
+    fn failed_transaction_cleanup_and_keep_vm_status<R: RemoteCache>(
         &self,
         error_code: VMStatus,
         gas_schedule: &CostTable,
         gas_left: GasUnits<GasCarrier>,
         txn_data: &TransactionMetadata,
-        remote_cache: &StateViewCache<'_>,
+        remote_cache: &R,
         account_currency_symbol: &IdentStr,
         log_context: &impl LogContext,
     ) -> (VMStatus, TransactionOutput) {
@@ -245,9 +245,9 @@ impl DiemVM {
         )
     }
 
-    fn execute_user_transaction(
+    fn execute_user_transaction<R: RemoteCache>(
         &self,
-        remote_cache: &StateViewCache<'_>,
+        remote_cache: &R,
         txn: &SignatureCheckedTransaction,
         log_context: &impl LogContext,
     ) -> (VMStatus, TransactionOutput) {
@@ -268,6 +268,7 @@ impl DiemVM {
             txn,
             remote_cache,
             false,
+            log_context,
         ) {
             Ok((_, currency_code)) => currency_code,
             Err(err) => {
@@ -328,9 +329,9 @@ impl DiemVM {
         }
     }
 
-    fn execute_writeset(
+    fn execute_writeset<R: RemoteCache>(
         &self,
-        remote_cache: &StateViewCache<'_>,
+        remote_cache: &R,
         writeset_payload: &WriteSetPayload,
         txn_sender: Option<AccountAddress>,
         log_context: &impl LogContext,
@@ -374,22 +375,22 @@ impl DiemVM {
 
     fn read_writeset(
         &self,
-        remote_cache: &StateViewCache<'_>,
+        state_view: &dyn StateView,
         write_set: &WriteSet,
     ) -> Result<(), VMStatus> {
         // All Move executions satisfy the read-before-write property. Thus we need to read each
         // access path that the write set is going to update.
         for (ap, _) in write_set.iter() {
-            remote_cache
+            state_view
                 .get(ap)
                 .map_err(|_| VMStatus::Error(StatusCode::STORAGE_ERROR))?;
         }
         Ok(())
     }
 
-    fn process_waypoint_change_set(
+    fn process_waypoint_change_set<R: RemoteCache + StateView>(
         &self,
-        remote_cache: &StateViewCache<'_>,
+        remote_cache: &R,
         writeset_payload: WriteSetPayload,
         log_context: &impl LogContext,
     ) -> Result<(VMStatus, TransactionOutput), VMStatus> {
@@ -407,9 +408,9 @@ impl DiemVM {
         ))
     }
 
-    fn process_block_prologue(
+    fn process_block_prologue<R: RemoteCache>(
         &self,
-        remote_cache: &StateViewCache<'_>,
+        remote_cache: &R,
         block_metadata: BlockMetadata,
         log_context: &impl LogContext,
     ) -> Result<(VMStatus, TransactionOutput), VMStatus> {
@@ -458,10 +459,10 @@ impl DiemVM {
         Ok((VMStatus::Executed, output))
     }
 
-    fn process_writeset_transaction(
+    fn process_writeset_transaction<R: RemoteCache + StateView>(
         &self,
-        remote_cache: &StateViewCache<'_>,
-        txn: SignatureCheckedTransaction,
+        remote_cache: &R,
+        txn: &SignatureCheckedTransaction,
         log_context: &impl LogContext,
     ) -> Result<(VMStatus, TransactionOutput), VMStatus> {
         fail_point!("move_adapter::process_writeset_transaction", |_| {
@@ -472,9 +473,14 @@ impl DiemVM {
 
         // Revalidate the transaction.
         let mut session = self.0.new_session(remote_cache);
-        if let Err(e) =
-            validate_signature_checked_transaction(&self.0, &mut session, &txn, remote_cache, false)
-        {
+        if let Err(e) = validate_signature_checked_transaction(
+            &self.0,
+            &mut session,
+            &txn,
+            remote_cache,
+            false,
+            log_context,
+        ) {
             return Ok(discard_error_vm_status(e));
         };
         self.execute_writeset_transaction(
@@ -494,9 +500,9 @@ impl DiemVM {
         )
     }
 
-    pub fn execute_writeset_transaction(
+    pub fn execute_writeset_transaction<R: RemoteCache + StateView>(
         &self,
-        remote_cache: &StateViewCache<'_>,
+        remote_cache: &R,
         writeset_payload: &WriteSetPayload,
         txn_data: TransactionMetadata,
         log_context: &impl LogContext,
@@ -635,7 +641,7 @@ impl DiemVM {
                 trace_code_block!("diem_vm::execute_block_impl", {"block", current_block_id}, execute_block_trace_guard);
             };
             let (vm_status, output, sender) =
-                self.execute_single_transaction(txn, data_cache, &log_context)?;
+                self.execute_single_transaction(&txn, data_cache, &log_context)?;
             if !output.status().is_discarded() {
                 data_cache.push_write_set(output.write_set());
             } else {
@@ -670,28 +676,28 @@ impl DiemVM {
         Ok(result)
     }
 
-    pub(crate) fn execute_single_transaction(
+    pub(crate) fn execute_single_transaction<R: RemoteCache + StateView>(
         &self,
-        txn: PreprocessedTransaction,
-        data_cache: &StateViewCache<'_>,
+        txn: &PreprocessedTransaction,
+        data_cache: &R,
         log_context: &impl LogContext,
     ) -> Result<(VMStatus, TransactionOutput, Option<String>), VMStatus> {
         Ok(match txn {
             PreprocessedTransaction::BlockMetadata(block_metadata) => {
                 let (vm_status, output) =
-                    self.process_block_prologue(data_cache, block_metadata, log_context)?;
+                    self.process_block_prologue(data_cache, block_metadata.clone(), log_context)?;
                 (vm_status, output, Some("block_prologue".to_string()))
             }
             PreprocessedTransaction::WaypointWriteSet(write_set_payload) => {
                 let (vm_status, output) =
-                    self.process_waypoint_change_set(data_cache, write_set_payload, log_context)?;
+                    self.process_waypoint_change_set(data_cache, write_set_payload.clone(), log_context)?;
                 (vm_status, output, Some("waypoint_write_set".to_string()))
             }
             PreprocessedTransaction::UserTransaction(txn) => {
                 let sender = txn.sender().to_string();
                 let _timer = TXN_TOTAL_SECONDS.start_timer();
                 let (vm_status, output) =
-                    self.execute_user_transaction(data_cache, &txn, log_context);
+                    self.execute_user_transaction(data_cache, txn, log_context);
 
                 // Increment the counter for user transactions executed.
                 let counter_label = match output.status() {
@@ -706,7 +712,7 @@ impl DiemVM {
             }
             PreprocessedTransaction::WriteSet(txn) => {
                 let (vm_status, output) =
-                    self.process_writeset_transaction(data_cache, *txn, log_context)?;
+                    self.process_writeset_transaction(data_cache, txn, log_context)?;
                 (vm_status, output, Some("write_set".to_string()))
             }
             PreprocessedTransaction::InvalidSignature => {
