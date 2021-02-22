@@ -3,7 +3,7 @@
 
 use std::{
     cell::UnsafeCell,
-    cmp::{PartialOrd, max},
+    cmp::{max, PartialOrd},
     collections::{btree_map::BTreeMap, HashMap},
     hash::Hash,
     sync::atomic::{AtomicUsize, Ordering},
@@ -23,7 +23,7 @@ unsafe impl<K: Sync, V: Sync> Sync for MVHashMap<K, V> {}
 //  but no entries can be added or deleted.
 //
 
-pub type Version = u64;
+pub type Version = usize;
 
 const FLAG_UNASSIGNED: usize = 0;
 const FLAG_DONE: usize = 2;
@@ -72,7 +72,7 @@ impl<K: Hash + Clone + Eq, V: Clone> MVHashMap<K, V> {
     pub fn get_change_set(&self) -> Vec<(K, Option<V>)> {
         let mut change_set = Vec::with_capacity(self.data.len());
         for (k, _) in self.data.iter() {
-            let val = self.read(k, u64::MAX).unwrap();
+            let val = self.read(k, usize::MAX).unwrap();
             change_set.push((k.clone(), val.clone()));
         }
         change_set
@@ -189,7 +189,11 @@ impl<K: Hash + Clone + Eq, V: Clone> MVHashMap<K, V> {
     }
 }
 
-impl<K, V> MVHashMap<K, V> where K: PartialOrd + Send + Clone + Hash + Eq, V: Send{
+impl<K, V> MVHashMap<K, V>
+where
+    K: PartialOrd + Send + Clone + Hash + Eq,
+    V: Send,
+{
     fn split_merge(
         num_cpus: usize,
         num: usize,

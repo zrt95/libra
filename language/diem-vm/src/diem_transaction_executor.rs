@@ -689,8 +689,11 @@ impl DiemVM {
                 (vm_status, output, Some("block_prologue".to_string()))
             }
             PreprocessedTransaction::WaypointWriteSet(write_set_payload) => {
-                let (vm_status, output) =
-                    self.process_waypoint_change_set(data_cache, write_set_payload.clone(), log_context)?;
+                let (vm_status, output) = self.process_waypoint_change_set(
+                    data_cache,
+                    write_set_payload.clone(),
+                    log_context,
+                )?;
                 (vm_status, output, Some("waypoint_write_set".to_string()))
             }
             PreprocessedTransaction::UserTransaction(txn) => {
@@ -794,7 +797,11 @@ impl VMExecutor for DiemVM {
             ))
         });
 
-        let output = Self::execute_block_and_keep_vm_status(transactions, state_view)?;
+        // let output = Self::execute_block_and_keep_vm_status(transactions, state_view)?;
+        let mut cache = StateViewCache::new(state_view);
+        let output = crate::parallel_executor::parallel_transaction_executor::ParallelTransactionExecutor::new()
+            .execute_transactions_parallel(transactions, &mut cache)?;
+
         Ok(output
             .into_iter()
             .map(|(_vm_status, txn_output)| txn_output)
