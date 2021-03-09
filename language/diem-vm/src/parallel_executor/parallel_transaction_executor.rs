@@ -4,7 +4,7 @@
 use crate::parallel_executor::dependency_analyzer::TransactionParameters;
 use crate::{
     data_cache::StateViewCache,
-    diem_transaction_executor::{preprocess_transaction, PreprocessedTransaction},
+    diem_transaction_executor::{preprocess_transaction, PreprocessedTransaction, is_reconfiguration},
     logging::AdapterLogSchema,
     parallel_executor::{
         data_cache::{VersionedDataCache, VersionedStateView},
@@ -182,6 +182,17 @@ impl ParallelTransactionExecutor {
                                 }
                                 let success = !output.status().is_discarded();
                                 outcomes.set_result(idx, (vm_status, output), success);
+
+                                if is_reconfiguration(&output) {
+                                    // TODO: Log reconfiguration?
+
+                                    // This transacton is correct, but all subsequent transactions
+                                    // must be rejected (with retry status) since it forced a
+                                    // reconfiguration.
+                                    stop_when.fetch_min(idx + 1, Ordering::SeqCst);
+                                    continue;
+                                }
+
                             }
                             Err(_e) => {
                                 panic!("TODO STOP VM & RETURN ERROR");

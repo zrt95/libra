@@ -760,7 +760,7 @@ pub(crate) fn preprocess_transaction(txn: Transaction) -> PreprocessedTransactio
     }
 }
 
-fn is_reconfiguration(vm_output: &TransactionOutput) -> bool {
+pub(crate) fn is_reconfiguration(vm_output: &TransactionOutput) -> bool {
     let new_epoch_event_key = diem_types::on_chain_config::new_epoch_event_key();
     vm_output
         .events()
