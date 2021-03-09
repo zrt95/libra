@@ -178,10 +178,7 @@ impl ParallelTransactionExecutor {
                                     // to be this one or lower.
                                     stop_when.fetch_min(idx, Ordering::SeqCst);
                                     continue;
-
                                 }
-                                let success = !output.status().is_discarded();
-                                outcomes.set_result(idx, (vm_status, output), success);
 
                                 if is_reconfiguration(&output) {
                                     // TODO: Log reconfiguration?
@@ -190,7 +187,13 @@ impl ParallelTransactionExecutor {
                                     // must be rejected (with retry status) since it forced a
                                     // reconfiguration.
                                     stop_when.fetch_min(idx + 1, Ordering::SeqCst);
+                                    let success = !output.status().is_discarded();
+                                    outcomes.set_result(idx, (vm_status, output), success);
                                     continue;
+                                }
+                                else {
+                                    let success = !output.status().is_discarded();
+                                    outcomes.set_result(idx, (vm_status, output), success);
                                 }
 
                             }
