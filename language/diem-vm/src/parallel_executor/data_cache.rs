@@ -39,7 +39,7 @@ impl VersionedDataCache {
         output: &TransactionOutput,
         version: usize,
         estimated_writes: impl Iterator<Item = AccessPath>,
-    ) {
+    ) -> Result<(), ()> {
         if !output.status().is_discarded() {
             for (k, v) in output.write_set() {
                 let val = match v {
@@ -47,17 +47,22 @@ impl VersionedDataCache {
                     WriteOp::Value(data) => Some(data.clone()),
                 };
 
-                self.as_ref().write(k, version, val).unwrap();
+                self.as_ref().write(k, version, val)?;
             }
 
             for w in estimated_writes {
+                // It should be safe to unwrap here since the MVMap was construted using
+                // this estimated writes. If not it is a bug.
                 self.as_ref().skip_if_not_set(&w, version).unwrap();
             }
         } else {
             for w in estimated_writes {
+                // It should be safe to unwrap here since the MVMap was construted using
+                // this estimated writes. If not it is a bug.
                 self.as_ref().skip(&w, version).unwrap();
             }
         }
+        Ok(())
     }
 }
 
