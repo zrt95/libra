@@ -15,7 +15,7 @@ use move_core_types::{
 };
 use move_vm_runtime::data_cache::RemoteCache;
 use mvhashmap::MVHashMap;
-use std::{borrow::Cow, cell::RefCell, collections::HashMap, convert::AsRef, thread, time::Duration};
+use std::{borrow::Cow, cell::RefCell, collections::{HashMap, HashSet}, convert::AsRef, thread, time::Duration};
 use vm::errors::*;
 
 pub struct VersionedDataCache(MVHashMap<AccessPath, Vec<u8>>);
@@ -43,17 +43,17 @@ impl VersionedDataCache {
         if !output.status().is_discarded() {
 
             // First make sure all outputs are ready for write.
-            let mut no_missing_entries = true;
+            let estimated_writes_hs : HashSet<_> = estimated_writes.collect();
             for (k, v) in output.write_set() {
-                no_missing_entries &= self.as_ref().exists_version(k, version)
-            }
-            if !no_missing_entries {
-                for w in estimated_writes {
-                    // It should be safe to unwrap here since the MVMap was construted using
-                    // this estimated writes. If not it is a bug.
-                    self.as_ref().skip(&w, version).unwrap();
+                if !estimated_writes_hs.contains(k){
+                    // Put skip in all entires.
+                    for w in estimated_writes_hs {
+                        // It should be safe to unwrap here since the MVMap was construted using
+                        // this estimated writes. If not it is a bug.
+                        self.as_ref().skip(&w, version).unwrap();
+                    }
+                    return Err(());
                 }
-                return Err(());
             }
 
             // We are sure all entries are present.
@@ -67,7 +67,7 @@ impl VersionedDataCache {
                 self.as_ref().write(k, version, val).unwrap();
             }
 
-            for w in estimated_writes {
+            for w in estimated_writes_hs {
                 // It should be safe to unwrap here since the MVMap was construted using
                 // this estimated writes. If not it is a bug.
                 self.as_ref().skip_if_not_set(&w, version).unwrap();
