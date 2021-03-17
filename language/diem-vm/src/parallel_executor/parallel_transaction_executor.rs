@@ -128,6 +128,7 @@ impl ParallelTransactionExecutor {
                     let thread_vm = DiemVM::new(data_cache);
 
                     let mut tx_idx_ring_buffer = VecDeque::with_capacity(10);
+                    let mut readjust = 0_usize;
 
                     loop {
                         if tx_idx_ring_buffer.len() < 10 {
@@ -145,8 +146,15 @@ impl ParallelTransactionExecutor {
                             break;
                         }
 
+                        // Pop one transaction from the buffer
                         let (idx, txn, (reads, writes)) =
                             tx_idx_ring_buffer.pop_front().unwrap(); // safe due to previous check
+
+                        // Ensure this transaction is still to be executed
+                        if !(idx < stop_when.load(Ordering::Relaxed)){
+                            println!("SKIP tx {}", idx);
+                            continue;
+                        }
 
                         let versioned_state_view =
                             VersionedStateView::new(idx, data_cache, &versioned_data_cache);
@@ -176,6 +184,8 @@ impl ParallelTransactionExecutor {
                                     // We therefore cut the execution of the block short here. We set
                                     // decrese the transaction index at which we stop, by seeting it
                                     // to be this one or lower.
+                                    println!("Adjust boundary {} (thread {})", idx, readjust);
+                                    readjust += 1;
                                     stop_when.fetch_min(idx, Ordering::SeqCst);
                                     continue;
                                 }

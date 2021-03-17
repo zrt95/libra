@@ -41,13 +41,30 @@ impl VersionedDataCache {
         estimated_writes: impl Iterator<Item = AccessPath>,
     ) -> Result<(), ()> {
         if !output.status().is_discarded() {
+
+            // First make sure all outputs are ready for write.
+            let mut no_missing_entries = true;
+            for (k, v) in output.write_set() {
+                no_missing_entries &= self.as_ref().exists_version(k, version)
+            }
+            if !no_missing_entries {
+                for w in estimated_writes {
+                    // It should be safe to unwrap here since the MVMap was construted using
+                    // this estimated writes. If not it is a bug.
+                    self.as_ref().skip(&w, version).unwrap();
+                }
+                return Err(());
+            }
+
+            // We are sure all entries are present.
             for (k, v) in output.write_set() {
                 let val = match v {
                     WriteOp::Deletion => None,
                     WriteOp::Value(data) => Some(data.clone()),
                 };
 
-                self.as_ref().write(k, version, val)?;
+                // Safe because we checked that the entry exists
+                self.as_ref().write(k, version, val).unwrap();
             }
 
             for w in estimated_writes {
