@@ -7,6 +7,7 @@ use std::{
     collections::{btree_map::BTreeMap, HashMap},
     hash::Hash,
     sync::atomic::{AtomicUsize, Ordering},
+    fmt::Debug,
 };
 
 unsafe impl<K: Send, V: Send> Send for MVHashMap<K, V> {}
@@ -48,7 +49,7 @@ impl<V> WriteVersionValue<V> {
     }
 }
 
-impl<K: Hash + Clone + Eq, V: Clone> MVHashMap<K, V> {
+impl<K: Debug+Hash + Clone + Eq, V: Debug+Clone> MVHashMap<K, V> {
     pub fn new() -> MVHashMap<K, V> {
         MVHashMap {
             data: HashMap::new(),
@@ -82,6 +83,17 @@ impl<K: Hash + Clone + Eq, V: Clone> MVHashMap<K, V> {
         self.data.len()
     }
 
+    pub fn exists_version(&self, key: &K, version: Version) -> bool {
+        let entry = self
+        .data
+        .get(key)
+        .and_then(|db|
+        {
+            db.get(&version)
+        });
+        entry.is_some()
+    }
+
     pub fn write(&self, key: &K, version: Version, data: Option<V>) -> Result<(), ()> {
         // By construction there will only be a single writer, before the
         // write there will be no readers on the variable.
@@ -91,9 +103,13 @@ impl<K: Hash + Clone + Eq, V: Clone> MVHashMap<K, V> {
         let entry = self
             .data
             .get(key)
-            .ok_or_else(|| ())?
+            .ok_or_else(|| {
+                println!("Write: Missing key.");
+                ()})?
             .get(&version)
-            .ok_or_else(|| ())?;
+            .ok_or_else(|| {
+                println!("Write: Missing Version {}.", version);
+                ()})?;
 
         #[cfg(test)]
         {
@@ -156,7 +172,9 @@ impl<K: Hash + Clone + Eq, V: Clone> MVHashMap<K, V> {
     }
 
     pub fn read(&self, key: &K, version: Version) -> Result<&Option<V>, Option<Version>> {
+
         // Get the smaller key
+        // If key does not exist return Err(None)
         let tree = self.data.get(key).ok_or_else(|| None)?;
 
         let mut iter = tree.range(0..version);
@@ -185,6 +203,8 @@ impl<K: Hash + Clone + Eq, V: Clone> MVHashMap<K, V> {
             }
         }
 
+        // We skipped all entries and therefore we should read from the DB
+        // therefore we return Err(None).
         Err(None)
     }
 }

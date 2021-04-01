@@ -16,9 +16,6 @@ unsafe impl Sync for OutcomeArray {}
 
 pub(crate) struct OutcomeArray {
     results: Vec<UnsafeCell<(VMStatus, TransactionOutput)>>,
-
-    success_num: AtomicUsize,
-    failure_num: AtomicUsize,
 }
 
 impl OutcomeArray {
@@ -37,46 +34,30 @@ impl OutcomeArray {
                     ))
                 })
                 .collect(),
-
-            success_num: AtomicUsize::new(0),
-            failure_num: AtomicUsize::new(0),
         }
     }
 
     pub fn set_result(&self, idx: usize, res: (VMStatus, TransactionOutput), success: bool) {
         // Only one thread can write at the time, so just set it.
-
         let entry = &self.results[idx];
         unsafe {
             let mut_entry = &mut *entry.get();
             *mut_entry = res;
         }
-
-        // #[cfg(test)]
-        {
-            if success {
-                self.success_num.fetch_add(1, Ordering::Relaxed);
-            } else {
-                self.failure_num.fetch_add(1, Ordering::Relaxed);
-            }
-        }
     }
 
-    pub fn get_stats(&self) -> (usize, usize) {
-        return (
-            self.success_num.load(Ordering::Relaxed),
-            self.failure_num.load(Ordering::Relaxed),
-        );
-    }
-
-    pub fn get_all_results(self) -> Result<Vec<(VMStatus, TransactionOutput)>, VMStatus> {
+    /// Returns a vec with all results, up the the length for which results were
+    //  reliably computed.
+    pub fn get_all_results(self, valid_length : usize) -> Result<Vec<(VMStatus, TransactionOutput)>, VMStatus> {
         let results = self.results;
-        Ok(unsafe {
+        let mut final_results = unsafe {
             // This is safe since UnsafeCell has no runtime representation.
             std::mem::transmute::<
                 Vec<UnsafeCell<(VMStatus, TransactionOutput)>>,
                 Vec<(VMStatus, TransactionOutput)>,
             >(results)
-        })
+        };
+        let _ = final_results.split_off(valid_length);
+        Ok(final_results)
     }
 }

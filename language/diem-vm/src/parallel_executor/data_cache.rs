@@ -15,7 +15,7 @@ use move_core_types::{
 };
 use move_vm_runtime::data_cache::RemoteCache;
 use mvhashmap::MVHashMap;
-use std::{borrow::Cow, cell::RefCell, collections::HashMap, convert::AsRef, thread, time::Duration};
+use std::{borrow::Cow, cell::RefCell, collections::{HashMap, HashSet}, convert::AsRef, thread, time::Duration};
 use vm::errors::*;
 
 pub struct VersionedDataCache(MVHashMap<AccessPath, Vec<u8>>);
@@ -34,30 +34,59 @@ impl VersionedDataCache {
         (max_dependency_length, VersionedDataCache(mv_hashmap))
     }
 
+    pub fn set_skip_all(        &self,
+        version: usize,
+        estimated_writes: impl Iterator<Item = AccessPath>,) {
+
+        // Put skip in all entires.
+        for w in estimated_writes {
+            // It should be safe to unwrap here since the MVMap was construted using
+            // this estimated writes. If not it is a bug.
+            self.as_ref().skip(&w, version).unwrap();
+        }
+    }
+
     pub fn apply_output(
         &self,
         output: &TransactionOutput,
         version: usize,
         estimated_writes: impl Iterator<Item = AccessPath>,
-    ) {
+    ) -> Result<(), ()> {
         if !output.status().is_discarded() {
+
+            // First make sure all outputs have entries in the MVMap
+            let estimated_writes_hs : HashSet<_> = estimated_writes.collect();
+            for (k, _) in output.write_set() {
+                if !estimated_writes_hs.contains(k){
+                    println!("Missing entry: {:?}", k);
+
+                    // Put skip in all entires.
+                    self.set_skip_all(version, estimated_writes_hs.into_iter());
+                    return Err(());
+                }
+            }
+
+            // We are sure all entries are present -- now update them all
             for (k, v) in output.write_set() {
                 let val = match v {
                     WriteOp::Deletion => None,
                     WriteOp::Value(data) => Some(data.clone()),
                 };
 
+                // Safe because we checked that the entry exists
                 self.as_ref().write(k, version, val).unwrap();
             }
 
-            for w in estimated_writes {
-                self.as_ref().skip_if_not_set(&w, version).unwrap();
+            // If any entries are not updated, write a 'skip' flag into them
+            for w in estimated_writes_hs {
+                // It should be safe to unwrap here since the MVMap was construted using
+                // this estimated writes. If not it is a bug.
+                self.as_ref().skip_if_not_set(&w, version).expect("Entry must exist.");
             }
         } else {
-            for w in estimated_writes {
-                self.as_ref().skip(&w, version).unwrap();
-            }
+            self.set_skip_all(version, estimated_writes);
         }
+        Ok(())
     }
 }
 

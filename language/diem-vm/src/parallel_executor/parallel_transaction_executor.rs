@@ -4,7 +4,7 @@
 use crate::parallel_executor::dependency_analyzer::TransactionParameters;
 use crate::{
     data_cache::StateViewCache,
-    diem_transaction_executor::{preprocess_transaction, PreprocessedTransaction},
+    diem_transaction_executor::{preprocess_transaction, PreprocessedTransaction, is_reconfiguration},
     logging::AdapterLogSchema,
     parallel_executor::{
         data_cache::{VersionedDataCache, VersionedStateView},
@@ -111,7 +111,7 @@ impl ParallelTransactionExecutor {
         );
 
         let curent_idx = AtomicUsize::new(0);
-        let stop_when = signature_verified_block.len();
+        let stop_when = AtomicUsize::new(signature_verified_block.len());
 
         scope(|s| {
             // How many threads to use?
@@ -120,7 +120,7 @@ impl ParallelTransactionExecutor {
 
             println!(
                 "Launching {} threads to execute (Max conflict {}) ... total txns: {:?}",
-                compute_cpus, max_dependency_level, stop_when
+                compute_cpus, max_dependency_level, stop_when.load(Ordering::Relaxed),
             );
             for _ in 0..(compute_cpus) {
                 s.spawn(|_| {
@@ -134,7 +134,7 @@ impl ParallelTransactionExecutor {
                             // How many transactions to have in the buffer.
 
                             let idx = curent_idx.fetch_add(1, Ordering::Relaxed);
-                            if idx < stop_when {
+                            if idx < stop_when.load(Ordering::Relaxed) {
                                 let (_, txn) = &signature_verified_block[idx];
                                 let (reads, writes) = infer_result[idx];
 
@@ -145,8 +145,14 @@ impl ParallelTransactionExecutor {
                             break;
                         }
 
+                        // Pop one transaction from the buffer
                         let (idx, txn, (reads, writes)) =
                             tx_idx_ring_buffer.pop_front().unwrap(); // safe due to previous check
+
+                        // Ensure this transaction is still to be executed
+                        if !(idx < stop_when.load(Ordering::Relaxed)){
+                            continue;
+                        }
 
                         let versioned_state_view =
                             VersionedStateView::new(idx, data_cache, &versioned_data_cache);
@@ -170,9 +176,33 @@ impl ParallelTransactionExecutor {
                         );
                         match res {
                             Ok((vm_status, output, _sender)) => {
-                                let success = !output.status().is_discarded();
-                                versioned_data_cache.apply_output(&output, idx, writes);
-                                outcomes.set_result(idx, (vm_status, output), success);
+
+                                if versioned_data_cache.apply_output(&output, idx, writes).is_err(){
+                                    // An error occured when estimating the write-set of this transaction.
+                                    // We therefore cut the execution of the block short here. We set
+                                    // decrese the transaction index at which we stop, by seeting it
+                                    // to be this one or lower.
+                                    println!("Adjust boundary {}", idx);
+                                    stop_when.fetch_min(idx, Ordering::SeqCst);
+                                    continue;
+                                }
+
+                                if is_reconfiguration(&output) {
+                                    // TODO: Log reconfiguration?
+
+                                    // This transacton is correct, but all subsequent transactions
+                                    // must be rejected (with retry status) since it forced a
+                                    // reconfiguration.
+                                    stop_when.fetch_min(idx + 1, Ordering::SeqCst);
+                                    let success = !output.status().is_discarded();
+                                    outcomes.set_result(idx, (vm_status, output), success);
+                                    continue;
+                                }
+                                else {
+                                    let success = !output.status().is_discarded();
+                                    outcomes.set_result(idx, (vm_status, output), success);
+                                }
+
                             }
                             Err(_e) => {
                                 panic!("TODO STOP VM & RETURN ERROR");
@@ -183,7 +213,10 @@ impl ParallelTransactionExecutor {
             }
         });
 
-        let all_results = outcomes.get_all_results();
+        // Splits the head of the vec of results that are valid
+        let valid_results_length = stop_when.load(Ordering::SeqCst);
+        println!("Valid length: {}", valid_results_length);
+        let all_results = outcomes.get_all_results(valid_results_length);
 
         drop(infer_result);
 
@@ -193,6 +226,7 @@ impl ParallelTransactionExecutor {
             drop(versioned_data_cache);
         });
 
+        assert!(all_results.as_ref().unwrap().len() == valid_results_length);
         all_results
     }
 }
