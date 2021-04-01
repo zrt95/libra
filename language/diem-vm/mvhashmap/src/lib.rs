@@ -7,6 +7,7 @@ use std::{
     collections::{btree_map::BTreeMap, HashMap},
     hash::Hash,
     sync::atomic::{AtomicUsize, Ordering},
+    fmt::Debug,
 };
 
 unsafe impl<K: Send, V: Send> Send for MVHashMap<K, V> {}
@@ -48,7 +49,7 @@ impl<V> WriteVersionValue<V> {
     }
 }
 
-impl<K: Hash + Clone + Eq, V: Clone> MVHashMap<K, V> {
+impl<K: Debug+Hash + Clone + Eq, V: Debug+Clone> MVHashMap<K, V> {
     pub fn new() -> MVHashMap<K, V> {
         MVHashMap {
             data: HashMap::new(),

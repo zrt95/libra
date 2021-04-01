@@ -128,7 +128,6 @@ impl ParallelTransactionExecutor {
                     let thread_vm = DiemVM::new(data_cache);
 
                     let mut tx_idx_ring_buffer = VecDeque::with_capacity(10);
-                    let mut readjust = 0_usize;
 
                     loop {
                         if tx_idx_ring_buffer.len() < 10 {
@@ -152,7 +151,6 @@ impl ParallelTransactionExecutor {
 
                         // Ensure this transaction is still to be executed
                         if !(idx < stop_when.load(Ordering::Relaxed)){
-                            println!("SKIP tx {}", idx);
                             continue;
                         }
 
@@ -184,8 +182,7 @@ impl ParallelTransactionExecutor {
                                     // We therefore cut the execution of the block short here. We set
                                     // decrese the transaction index at which we stop, by seeting it
                                     // to be this one or lower.
-                                    println!("Adjust boundary {} (thread {})", idx, readjust);
-                                    readjust += 1;
+                                    println!("Adjust boundary {}", idx);
                                     stop_when.fetch_min(idx, Ordering::SeqCst);
                                     continue;
                                 }
@@ -216,7 +213,10 @@ impl ParallelTransactionExecutor {
             }
         });
 
-        let all_results = outcomes.get_all_results();
+        // Splits the head of the vec of results that are valid
+        let valid_results_length = stop_when.load(Ordering::SeqCst);
+        println!("Valid length: {}", valid_results_length);
+        let all_results = outcomes.get_all_results(valid_results_length);
 
         drop(infer_result);
 
@@ -226,6 +226,7 @@ impl ParallelTransactionExecutor {
             drop(versioned_data_cache);
         });
 
+        assert!(all_results.as_ref().unwrap().len() == valid_results_length);
         all_results
     }
 }
