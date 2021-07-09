@@ -66,7 +66,7 @@ impl<'a, 'b, S: MoveStorage> MoveStorage for DeltaStorage<'a, 'b, S> {
     ) -> PartialVMResult<Option<Cow<[u8]>>> {
         if let Some(account_storage) = self.delta.accounts().get(address) {
             if let Some(blob_opt) = account_storage.resources().get(tag) {
-                 return Ok(blob_opt.as_ref().map(Cow::from));
+                return Ok(blob_opt.as_ref().map(Cow::from));
             }
         }
 

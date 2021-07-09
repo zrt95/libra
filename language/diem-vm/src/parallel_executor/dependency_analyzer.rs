@@ -222,7 +222,7 @@ impl DependencyAnalyzer {
                     unimplemented!();
                 }
             } else {
-                return Err(VMStatus::Error(StatusCode::UNKNOWN_VALIDATION_STATUS))
+                return Err(VMStatus::Error(StatusCode::UNKNOWN_VALIDATION_STATUS));
             }
         }
 

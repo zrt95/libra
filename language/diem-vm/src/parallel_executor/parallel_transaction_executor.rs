@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::parallel_executor::dependency_analyzer::TransactionParameters;
+use crate::parallel_executor::scheduler::Scheduler;
 use crate::{
     data_cache::StateViewCache,
     diem_transaction_executor::{
@@ -26,7 +27,10 @@ use rayon::{prelude::*, scope};
 use std::{
     cmp::{max, min},
     collections::VecDeque,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 
 pub struct ParallelTransactionExecutor {
@@ -113,8 +117,7 @@ impl ParallelTransactionExecutor {
             || OutcomeArray::new(num_txns),
         );
 
-        let curent_idx = AtomicUsize::new(0);
-        let stop_when = AtomicUsize::new(signature_verified_block.len());
+        let scheduler = Arc::new(Scheduler::new(num_txns));
 
         scope(|s| {
             // How many threads to use?
@@ -125,49 +128,37 @@ impl ParallelTransactionExecutor {
                 "Launching {} threads to execute (Max conflict {}) ... total txns: {:?}",
                 compute_cpus,
                 max_dependency_level,
-                stop_when.load(Ordering::Relaxed),
+                scheduler.get_txn_num(),
             );
             for _ in 0..(compute_cpus) {
                 s.spawn(|_| {
+                    let scheduler = Arc::clone(&scheduler);
                     // Make a new VM per thread -- with its own module cache
                     let thread_vm = DiemVM::new(data_cache);
 
-                    let mut tx_idx_ring_buffer = VecDeque::with_capacity(10);
-
                     loop {
-                        if tx_idx_ring_buffer.len() < 10 {
-                            // How many transactions to have in the buffer.
+                        let idx = match scheduler.next_task() {
+                            Some(id) => id,
+                            None => break,
+                        };
 
-                            let idx = curent_idx.fetch_add(1, Ordering::Relaxed);
-                            if idx < stop_when.load(Ordering::Relaxed) {
-                                let txn = &signature_verified_block[idx];
-                                let (reads, writes) = infer_result[idx];
-
-                                tx_idx_ring_buffer.push_back((idx, txn, (reads, writes)));
-                            }
-                        }
-                        if tx_idx_ring_buffer.len() == 0 {
-                            break;
-                        }
-
-                        // Pop one transaction from the buffer
-                        let (idx, txn, (reads, writes)) = tx_idx_ring_buffer.pop_front().unwrap(); // safe due to previous check
-
-                        // Ensure this transaction is still to be executed
-                        if !(idx < stop_when.load(Ordering::Relaxed)) {
+                        if idx >= scheduler.get_txn_num() {
                             continue;
                         }
+
+                        let txn = &signature_verified_block[idx];
+                        let (reads, writes) = infer_result[idx];
 
                         let versioned_state_view =
                             VersionedStateView::new(idx, data_cache, &versioned_data_cache);
 
-                        // Delay and move to next tx if cannot execure now.
-                        if reads
-                            .clone()
-                            .any(|k| versioned_state_view.will_read_block(&k))
-                        {
-                            tx_idx_ring_buffer.push_back((idx, txn, (reads, writes)));
-
+                        // If the txn has unresolved dependency, adds the txn to deps_mapping of its dependency (only the first one) and continue
+                        if reads.clone().any(|k| {
+                            versioned_state_view
+                                .will_read_block_return_version(&k)
+                                .and_then(|dep_id| scheduler.update_read_deps(idx, dep_id))
+                                .unwrap_or(false)
+                        }) {
                             // This causes a PAUSE on an x64 arch, and takes 140 cycles. Allows other
                             // core to take resources and better HT.
                             ::std::sync::atomic::spin_loop_hint();
@@ -183,6 +174,8 @@ impl ParallelTransactionExecutor {
                         );
                         match res {
                             Ok((vm_status, output, _sender)) => {
+                                scheduler.update_after_execution(idx);
+
                                 if versioned_data_cache
                                     .apply_output(&output, idx, writes)
                                     .is_err()
@@ -192,7 +185,7 @@ impl ParallelTransactionExecutor {
                                     // decrese the transaction index at which we stop, by seeting it
                                     // to be this one or lower.
                                     println!("Adjust boundary {}", idx);
-                                    stop_when.fetch_min(idx, Ordering::SeqCst);
+                                    scheduler.set_stop_version(idx);
                                     continue;
                                 }
 
@@ -202,7 +195,7 @@ impl ParallelTransactionExecutor {
                                     // This transacton is correct, but all subsequent transactions
                                     // must be rejected (with retry status) since it forced a
                                     // reconfiguration.
-                                    stop_when.fetch_min(idx + 1, Ordering::SeqCst);
+                                    scheduler.set_stop_version(idx + 1);
                                     let success = !output.status().is_discarded();
                                     outcomes.set_result(idx, (vm_status, output), success);
                                     continue;
@@ -220,8 +213,10 @@ impl ParallelTransactionExecutor {
             }
         });
 
+        // scheduler.print_info();
+
         // Splits the head of the vec of results that are valid
-        let valid_results_length = stop_when.load(Ordering::SeqCst);
+        let valid_results_length = scheduler.get_txn_num();
         println!("Valid length: {}", valid_results_length);
         let all_results = outcomes.get_all_results(valid_results_length);
 

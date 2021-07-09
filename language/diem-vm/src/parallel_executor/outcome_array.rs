@@ -56,7 +56,9 @@ impl OutcomeArray {
         self,
         valid_length: usize,
     ) -> Result<Vec<(VMStatus, TransactionOutput)>, VMStatus> {
-        let mut results = self.results.into_iter()
+        let mut results = self
+            .results
+            .into_iter()
             .map(|cell| cell.into_inner())
             .collect::<Option<Vec<_>>>()
             .unwrap();
