@@ -14,7 +14,7 @@ use move_core_types::{
 };
 use move_vm_runtime::data_cache::MoveStorage;
 use mvhashmap::MVHashMap;
-use std::{borrow::Cow, convert::AsRef, thread, time::Duration, collections::HashSet};
+use std::{borrow::Cow, collections::HashSet, convert::AsRef, thread, time::Duration};
 
 pub struct VersionedDataCache(MVHashMap<AccessPath, Vec<u8>>);
 
@@ -111,6 +111,15 @@ impl<'view> VersionedStateView<'view> {
             return true;
         }
         return false;
+    }
+
+    // Return Some(version) when reading access_path is blcked by transaction of id=version, otherwise return None
+    pub fn will_read_block_return_version(&self, access_path: &AccessPath) -> Option<usize> {
+        let read = self.placeholder.as_ref().read(access_path, self.version);
+        if let Err(Some(version)) = read {
+            return Some(version);
+        }
+        return None;
     }
 
     fn get_bytes_ref(&self, access_path: &AccessPath) -> PartialVMResult<Option<Cow<[u8]>>> {
