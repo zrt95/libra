@@ -16,6 +16,15 @@ use diem_types::{
 use move_core_types::vm_status::{KeptVMStatus, StatusCode, VMStatus};
 use std::collections::{HashMap, HashSet};
 
+pub(crate) trait DependencyAnalyzer<'a> {
+    type T: Iterator<Item = AccessPath> + 'a;
+
+    fn get_inferred_read_write_set(
+        &'a self,
+        txn: &PreprocessedTransaction,
+    ) -> Result<(Self::T, Self::T), VMStatus>;
+}
+
 // Structure that holds infered read/write sets
 
 #[derive(Debug, Clone)]
@@ -64,21 +73,18 @@ impl ScriptReadWriteSet {
 
     // Return the read access paths specialized for these parameters
     // TODO: return a result in case the params are not long enough.
-    pub fn reads<'a>(&'a self, params: &'a TransactionParameters) -> ScriptReadWriteSetVarIter {
+    pub fn reads<'a>(&'a self, params: TransactionParameters) -> ScriptReadWriteSetVarIter {
         return ScriptReadWriteSetVarIter::new(&self.reads, params);
     }
 
     // Return the write access paths specialized for these parameters
     // TODO: return a result in case the params are not long enough.
-    pub fn writes<'a>(
-        &'a self,
-        params: &'a TransactionParameters,
-    ) -> ScriptReadWriteSetVarIter<'a> {
+    pub fn writes<'a>(&'a self, params: TransactionParameters) -> ScriptReadWriteSetVarIter<'a> {
         return ScriptReadWriteSetVarIter::new(&self.writes, params);
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct TransactionParameters(Vec<AccountAddress>);
 
 impl TransactionParameters {
@@ -110,12 +116,12 @@ impl TransactionParameters {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct ScriptReadWriteSetVarIter<'a> {
     // A link to the array we iterate over
     array: &'a [(ScriptReadWriteSetVar, AccessPath)],
     // The parameters we use to popular the read-write set
-    params: &'a TransactionParameters,
+    params: TransactionParameters,
     // the position we are in the array.
     seq: usize,
 }
@@ -123,7 +129,7 @@ pub struct ScriptReadWriteSetVarIter<'a> {
 impl<'a> ScriptReadWriteSetVarIter<'a> {
     fn new(
         array: &'a Vec<(ScriptReadWriteSetVar, AccessPath)>,
-        params: &'a TransactionParameters,
+        params: TransactionParameters,
     ) -> ScriptReadWriteSetVarIter<'a> {
         ScriptReadWriteSetVarIter {
             array,
@@ -157,11 +163,11 @@ impl<'a> Iterator for ScriptReadWriteSetVarIter<'a> {
     }
 }
 
-pub(crate) struct DependencyAnalyzer {
+pub(crate) struct TransactionDependencyAnalyzer {
     script_map: HashMap<Vec<u8>, ScriptReadWriteSet>,
 }
 
-impl DependencyAnalyzer {
+impl TransactionDependencyAnalyzer {
     pub fn new_from_transactions(
         transactions: &[PreprocessedTransaction],
         data_cache: &StateViewCache,
@@ -231,18 +237,16 @@ impl DependencyAnalyzer {
             script_map: read_write_infer,
         })
     }
+}
 
-    pub fn get_inferred_read_write_set<'a>(
+impl<'a> DependencyAnalyzer<'a> for TransactionDependencyAnalyzer {
+    type T = ScriptReadWriteSetVarIter<'a>;
+
+    fn get_inferred_read_write_set(
         &'a self,
         txn: &PreprocessedTransaction,
-        params: &'a TransactionParameters,
-    ) -> Result<
-        (
-            impl Iterator<Item = AccessPath> + 'a + Copy,
-            impl Iterator<Item = AccessPath> + 'a + Copy,
-        ),
-        VMStatus,
-    > {
+    ) -> Result<(Self::T, Self::T), VMStatus> {
+        let params = TransactionParameters::new_from(txn);
         if let PreprocessedTransaction::UserTransaction(user_txn) = txn {
             if let TransactionPayload::Script(script) = user_txn.payload() {
                 let deps = match self.script_map.get(script.code()) {
@@ -250,7 +254,7 @@ impl DependencyAnalyzer {
                     None => return Err(VMStatus::Error(StatusCode::UNKNOWN_VALIDATION_STATUS)),
                 };
 
-                return Ok((deps.reads(params), deps.writes(params)));
+                return Ok((deps.reads(params.clone()), deps.writes(params)));
             }
         }
         Err(VMStatus::Error(StatusCode::UNKNOWN_VALIDATION_STATUS))

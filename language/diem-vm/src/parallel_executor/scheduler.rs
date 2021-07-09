@@ -1,9 +1,7 @@
 use crossbeam_queue::SegQueue;
-use std::{
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex,
 };
 
 const FLAG_NOT_EXECUTED: usize = 0;

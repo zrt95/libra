@@ -1,8 +1,6 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::parallel_executor::dependency_analyzer::TransactionParameters;
-use crate::parallel_executor::scheduler::Scheduler;
 use crate::{
     data_cache::StateViewCache,
     diem_transaction_executor::{
@@ -11,8 +9,9 @@ use crate::{
     logging::AdapterLogSchema,
     parallel_executor::{
         data_cache::{VersionedDataCache, VersionedStateView},
-        dependency_analyzer::DependencyAnalyzer,
+        dependency_analyzer::{DependencyAnalyzer, TransactionDependencyAnalyzer},
         outcome_array::OutcomeArray,
+        scheduler::Scheduler,
     },
     DiemVM,
 };
@@ -59,8 +58,10 @@ impl ParallelTransactionExecutor {
         // transactions are detected this returns and err, and we revert to sequential
         // block processing.
 
-        let inferer =
-            DependencyAnalyzer::new_from_transactions(&signature_verified_block, data_cache);
+        let inferer = TransactionDependencyAnalyzer::new_from_transactions(
+            &signature_verified_block,
+            data_cache,
+        );
         let read_write_infer = match inferer {
             Err(_) => {
                 return DiemVM::new(data_cache)
@@ -69,18 +70,11 @@ impl ParallelTransactionExecutor {
             Ok(val) => val,
         };
 
-        let args: Vec<_> = signature_verified_block
-            .par_iter()
-            .with_min_len(chunks)
-            .map(TransactionParameters::new_from)
-            .collect();
-
         let infer_result: Vec<_> = {
             match signature_verified_block
                 .par_iter()
-                .zip(args.par_iter())
                 .with_min_len(chunks)
-                .map(|(txn, args)| read_write_infer.get_inferred_read_write_set(txn, args))
+                .map(|txn| read_write_infer.get_inferred_read_write_set(txn))
                 .collect::<Result<Vec<_>, VMStatus>>()
             {
                 Ok(res) => res,
@@ -100,7 +94,7 @@ impl ParallelTransactionExecutor {
             .fold(
                 || Vec::new(),
                 |mut acc, (idx, (_, txn_writes))| {
-                    acc.extend(txn_writes.map(|ap| (ap, idx)));
+                    acc.extend(txn_writes.clone().map(|ap| (ap, idx)));
                     acc
                 },
             )
@@ -147,7 +141,7 @@ impl ParallelTransactionExecutor {
                         }
 
                         let txn = &signature_verified_block[idx];
-                        let (reads, writes) = infer_result[idx];
+                        let (reads, writes) = &infer_result[idx];
 
                         let versioned_state_view =
                             VersionedStateView::new(idx, data_cache, &versioned_data_cache);
@@ -177,7 +171,7 @@ impl ParallelTransactionExecutor {
                                 scheduler.update_after_execution(idx);
 
                                 if versioned_data_cache
-                                    .apply_output(&output, idx, writes)
+                                    .apply_output(&output, idx, writes.clone())
                                     .is_err()
                                 {
                                     // An error occured when estimating the write-set of this transaction.
