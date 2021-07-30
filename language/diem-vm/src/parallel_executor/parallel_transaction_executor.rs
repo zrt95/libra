@@ -112,6 +112,7 @@ impl ParallelTransactionExecutor {
         );
 
         let scheduler = Arc::new(Scheduler::new(num_txns));
+        let executed_txn_counter = AtomicUsize::new(0);
 
         scope(|s| {
             // How many threads to use?
@@ -133,7 +134,15 @@ impl ParallelTransactionExecutor {
                     loop {
                         let idx = match scheduler.next_task() {
                             Some(id) => id,
-                            None => break,
+                            None => {
+                                // break the loop until all txns are executed
+                                if executed_txn_counter.load(Ordering::SeqCst) >= scheduler.get_txn_num() {
+                                    break;
+                                } else {
+                                    ::std::sync::atomic::spin_loop_hint();
+                                    continue;
+                                }
+                            }
                         };
 
                         if idx >= scheduler.get_txn_num() {
@@ -166,6 +175,8 @@ impl ParallelTransactionExecutor {
                             &versioned_state_view,
                             &log_context,
                         );
+                        executed_txn_counter.fetch_add(1, Ordering::SeqCst);
+
                         match res {
                             Ok((vm_status, output, _sender)) => {
                                 scheduler.update_after_execution(idx);
