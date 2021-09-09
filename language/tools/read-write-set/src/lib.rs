@@ -4,7 +4,7 @@
 pub mod dynamic_analysis;
 
 use crate::dynamic_analysis::ConcretizedSecondaryIndexes;
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use move_binary_format::file_format::CompiledModule;
 use move_bytecode_utils::Modules;
 use move_core_types::{
@@ -19,6 +19,7 @@ use prover_bytecode::{
     function_target_pipeline::{FunctionTargetPipeline, FunctionTargetsHolder, FunctionVariant},
     read_write_set_analysis::{ReadWriteSetProcessor, ReadWriteSetState},
 };
+use read_write_set_types::ReadWriteSet;
 
 pub struct ReadWriteSetAnalysis {
     targets: FunctionTargetsHolder,
@@ -71,6 +72,11 @@ impl ReadWriteSetAnalysis {
             .flatten()
     }
 
+    pub fn get_canonical_summary(&self, module: &ModuleId, fun: &IdentStr) -> Option<ReadWriteSet> {
+        self.get_summary(module, fun)
+            .map(|rw| rw.normalize(&self.env))
+    }
+
     fn get_summary_(&self, module: &ModuleId, fun: &IdentStr) -> Result<&ReadWriteSetState> {
         if let Some(state) = self.get_summary(module, fun) {
             Ok(state)
@@ -91,13 +97,14 @@ impl ReadWriteSetAnalysis {
         type_actuals: &[TypeTag],
         blockchain_view: &impl MoveResolver,
     ) -> Result<ConcretizedSecondaryIndexes> {
-        let state = self.get_summary_(module, fun)?;
+        let state = self.get_summary_(module, fun)?.normalize(&self.env);
         dynamic_analysis::concretize(
-            state.accesses().clone(),
+            state,
+            module,
+            fun,
             signers,
             actuals,
             type_actuals,
-            &self.get_function_env(module, fun).unwrap(),
             blockchain_view,
         )
     }
@@ -178,19 +185,27 @@ impl ReadWriteSetAnalysis {
         blockchain_view: &impl MoveResolver,
         is_write: bool,
     ) -> Result<Vec<ResourceKey>> {
-        if let Some(state) = self.get_summary(module, fun) {
+        if let Some(state) = self
+            .get_summary(module, fun)
+            .map(|s| s.normalize(&self.env))
+        {
             let results = dynamic_analysis::concretize(
-                state.accesses().clone(),
+                state,
+                module,
+                fun,
                 signers,
                 actuals,
                 type_actuals,
-                &self.get_function_env(module, fun).unwrap(),
                 blockchain_view,
             )?;
             Ok(if is_write {
-                results.get_keys_written(&self.env)
+                results
+                    .get_keys_written()
+                    .ok_or_else(|| anyhow!("Failed to get keys written"))?
             } else {
-                results.get_keys_read(&self.env)
+                results
+                    .get_keys_read()
+                    .ok_or_else(|| anyhow!("Failed to get keys read"))?
             })
         } else {
             bail!("Couldn't resolve function {:?}::{:?}", module, fun)
