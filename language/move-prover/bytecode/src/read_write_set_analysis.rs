@@ -28,6 +28,7 @@ use move_model::{
 };
 use read_write_set_types::{
     Access, AccessPath as RWAccessPath, Offset as RWOffset, ReadWriteSet, Root as RWRoot,
+    RootAddress as RWRootAddress,
 };
 use std::{fmt, fmt::Formatter};
 
@@ -869,24 +870,35 @@ impl AccessPath {
             .map(|offset| offset.normalize(env))
             .collect::<Vec<_>>();
 
-        let (roots, offsets) = match self.root() {
-            Root::Formal(idx) => (vec![RWRoot::Formal(*idx)], normalized_offset),
+        let roots = match self.root() {
+            Root::Formal(idx) => {
+                if normalized_offset.is_empty() {
+                    return vec![];
+                }
+                let access_type = if let RWOffset::Global(ty) = normalized_offset.remove(0) {
+                    ty
+                } else {
+                    return vec![];
+                };
+                vec![RWRoot {
+                    root: RWRootAddress::Formal(*idx),
+                    type_: access_type,
+                }]
+            }
             Root::Global(key) => {
-                let first_offset = RWOffset::Global(
-                    key.struct_type()
-                        .get_type()
-                        .into_struct_type(env)
-                        .expect("None struct type found in global key"),
-                );
-                normalized_offset.insert(0, first_offset);
-                (
-                    key.address()
-                        .get_concrete_addresses()
-                        .into_iter()
-                        .map(RWRoot::Const)
-                        .collect(),
-                    normalized_offset,
-                )
+                let access_type = key
+                    .struct_type()
+                    .get_type()
+                    .into_struct_type(env)
+                    .expect("None struct type found in global key");
+                key.address()
+                    .get_concrete_addresses()
+                    .into_iter()
+                    .map(|addr| RWRoot {
+                        root: RWRootAddress::Const(addr),
+                        type_: access_type.clone(),
+                    })
+                    .collect()
             }
             Root::Local(_) | Root::Return(_) => panic!("Malformed root"),
         };
@@ -895,7 +907,7 @@ impl AccessPath {
             .into_iter()
             .map(|root| RWAccessPath {
                 root,
-                offsets: offsets.clone(),
+                offsets: normalized_offset.clone(),
             })
             .collect()
     }
