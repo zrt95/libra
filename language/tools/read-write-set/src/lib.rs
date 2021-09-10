@@ -2,24 +2,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod dynamic_analysis;
+pub mod normalize;
 
-use crate::dynamic_analysis::ConcretizedSecondaryIndexes;
-use anyhow::{anyhow, bail, Result};
+use crate::normalize::NormalizedReadWriteSetAnalysis;
+use anyhow::Result;
 use move_binary_format::file_format::CompiledModule;
 use move_bytecode_utils::Modules;
 use move_core_types::{
-    account_address::AccountAddress,
-    identifier::IdentStr,
-    language_storage::{ModuleId, ResourceKey, TypeTag},
-    resolver::MoveResolver,
+    identifier::{IdentStr, Identifier},
+    language_storage::ModuleId,
 };
 use move_model::model::{FunctionEnv, GlobalEnv};
 use prover_bytecode::{
-    access_path::Offset,
     function_target_pipeline::{FunctionTargetPipeline, FunctionTargetsHolder, FunctionVariant},
     read_write_set_analysis::{ReadWriteSetProcessor, ReadWriteSetState},
 };
 use read_write_set_types::ReadWriteSet;
+use std::collections::{BTreeMap, HashSet};
 
 pub struct ReadWriteSetAnalysis {
     targets: FunctionTargetsHolder,
@@ -72,150 +71,39 @@ impl ReadWriteSetAnalysis {
             .flatten()
     }
 
-    pub fn get_canonical_summary(&self, module: &ModuleId, fun: &IdentStr) -> Option<ReadWriteSet> {
-        self.get_summary(module, fun)
-            .map(|rw| rw.normalize(&self.env))
-    }
-
-    fn get_summary_(&self, module: &ModuleId, fun: &IdentStr) -> Result<&ReadWriteSetState> {
-        if let Some(state) = self.get_summary(module, fun) {
-            Ok(state)
-        } else {
-            bail!("Couldn't resolve function {:?}::{:?}", module, fun)
-        }
-    }
-
-    /// Returns an overapproximation of the access paths in global storage that will be read/written
-    /// by `module::fun` if called with arguments `signers`, `actuals`, `type_actuals` in state
-    /// `blockchain_view`.
-    pub fn get_concretized_summary(
-        &self,
-        module: &ModuleId,
-        fun: &IdentStr,
-        signers: &[AccountAddress],
-        actuals: &[Vec<u8>],
-        type_actuals: &[TypeTag],
-        blockchain_view: &impl MoveResolver,
-    ) -> Result<ConcretizedSecondaryIndexes> {
-        let state = self.get_summary_(module, fun)?.normalize(&self.env);
-        dynamic_analysis::concretize(
-            state,
-            module,
-            fun,
-            signers,
-            actuals,
-            type_actuals,
-            blockchain_view,
-        )
-    }
-
-    /// Return `true` if `module`::`fun` may read an address from the blockchain state and
-    /// subsequently read/write a resource stored at that address. Return `false` if the function
-    /// will not do this in any possible concrete execution. Return an error if `module`::`fun` does
-    /// not exist.
-    pub fn may_have_secondary_indexes(&self, module: &ModuleId, fun: &IdentStr) -> Result<bool> {
-        let state = self.get_summary_(module, fun)?;
-        let mut has_secondary_index = false;
-        state.accesses().iter_offsets(|offset| {
-            if matches!(offset, Offset::Global(_)) {
-                has_secondary_index = true
-            }
-        });
-        Ok(has_secondary_index)
-    }
-
-    /// Returns an overapproximation of the `ResourceKey`'s in global storage that will be written
-    /// by `module::fun` if called with arguments `signers`, `actuals`, `type_actuals` in state
-    /// `blockchain_view`.
-    pub fn get_keys_written(
-        &self,
-        module: &ModuleId,
-        fun: &IdentStr,
-        signers: &[AccountAddress],
-        actuals: &[Vec<u8>],
-        type_actuals: &[TypeTag],
-        blockchain_view: &impl MoveResolver,
-    ) -> Result<Vec<ResourceKey>> {
-        self.get_concretized_keys(
-            module,
-            fun,
-            signers,
-            actuals,
-            type_actuals,
-            blockchain_view,
-            true,
-        )
-    }
-
-    /// Returns an overapproximation of the `ResourceKey`'s in global storage that will be read by
-    /// `module::fun` if called with arguments `signers`, `actuals`, `type_actuals` in state
-    /// `blockchain_view`.
-    pub fn get_keys_read(
-        &self,
-        module: &ModuleId,
-        fun: &IdentStr,
-        signers: &[AccountAddress],
-        actuals: &[Vec<u8>],
-        type_actuals: &[TypeTag],
-        blockchain_view: &impl MoveResolver,
-    ) -> Result<Vec<ResourceKey>> {
-        self.get_concretized_keys(
-            module,
-            fun,
-            signers,
-            actuals,
-            type_actuals,
-            blockchain_view,
-            false,
-        )
-    }
-
-    /// Returns an overapproximation of the `ResourceKey`'s in global storage that will be accesses
-    /// by module::fun` if called with arguments `signers`, `actuals`, `type_actuals` in state
-    /// `blockchain_view`.
-    /// If `is_write` is true, only ResourceKey's written will be returned; otherwise, only
-    /// ResourceKey's read will be returned.
-    pub fn get_concretized_keys(
-        &self,
-        module: &ModuleId,
-        fun: &IdentStr,
-        signers: &[AccountAddress],
-        actuals: &[Vec<u8>],
-        type_actuals: &[TypeTag],
-        blockchain_view: &impl MoveResolver,
-        is_write: bool,
-    ) -> Result<Vec<ResourceKey>> {
-        if let Some(state) = self
-            .get_summary(module, fun)
-            .map(|s| s.normalize(&self.env))
-        {
-            let results = dynamic_analysis::concretize(
-                state,
-                module,
-                fun,
-                signers,
-                actuals,
-                type_actuals,
-                blockchain_view,
-            )?;
-            Ok(if is_write {
-                results
-                    .get_keys_written()
-                    .ok_or_else(|| anyhow!("Failed to get keys written"))?
-            } else {
-                results
-                    .get_keys_read()
-                    .ok_or_else(|| anyhow!("Failed to get keys read"))?
-            })
-        } else {
-            bail!("Couldn't resolve function {:?}::{:?}", module, fun)
-        }
-    }
-
     /// Returns the FunctionEnv for `module`::`fun`
     /// Returns `None` if this function does not exist
     pub fn get_function_env(&self, module: &ModuleId, fun: &IdentStr) -> Option<FunctionEnv> {
         self.env
             .find_function_by_language_storage_id_name(module, &fun.to_owned())
+    }
+
+    pub fn normalize(
+        &self,
+        add_ons: Vec<(ModuleId, Identifier)>,
+    ) -> NormalizedReadWriteSetAnalysis {
+        let add_on_table = add_ons.into_iter().collect::<HashSet<_>>();
+        let mut result: BTreeMap<ModuleId, BTreeMap<Identifier, ReadWriteSet>> = BTreeMap::new();
+        for module in self.env.get_modules() {
+            let module_id = module.get_verified_module().self_id();
+            let module_entry = result.entry(module_id.clone()).or_default();
+            for func in module.get_functions() {
+                let func_name = func.get_identifier();
+                if func.is_script()
+                    || add_on_table.contains(&(module_id.clone(), func_name.clone()))
+                {
+                    module_entry.insert(
+                        func.get_identifier(),
+                        self.targets
+                            .get_data(&func.get_qualified_id(), &FunctionVariant::Baseline)
+                            .map(|data| data.annotations.get::<ReadWriteSetState>())
+                            .flatten()
+                            .unwrap()
+                            .normalize(&self.env),
+                    );
+                }
+            }
+        }
+        NormalizedReadWriteSetAnalysis::new(result)
     }
 }

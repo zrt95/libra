@@ -74,7 +74,7 @@ impl ConcretizedFormals {
     /// Construct a `ConcretizedFormals` from `accesses` by binding the formals and type variables in
     /// `accesses` to `actuals` and `type_actuals`.
     fn from_args_(
-        read_write_set: ReadWriteSet,
+        read_write_set: &ReadWriteSet,
         actuals: &[Option<AccountAddress>],
         type_actuals: &[TypeTag],
     ) -> ConcretizedFormals {
@@ -86,7 +86,7 @@ impl ConcretizedFormals {
     /// For example: if `accesses` is Formal(0)/0x1::M::S<TypeVar(0)>/f -> Read, `signers` is 0xA
     /// and type_actuals is 0x2::M2::S2, this will return  0xA/0x1::M::S<0x2::M2::S@>/f -> Read
     pub fn from_args(
-        read_write_set: ReadWriteSet,
+        read_write_set: &ReadWriteSet,
         signers: &[AccountAddress],
         actuals: &[Vec<u8>],
         formal_types: &[TypeTag],
@@ -247,7 +247,7 @@ impl ConcretizedFormals {
 /// `type_actuals`. In addition, concretize all secondary indexes in `accesses` against the state in
 /// `blockchain_view`.
 pub fn concretize(
-    accesses: ReadWriteSet,
+    accesses: &ReadWriteSet,
     module: &ModuleId,
     fun: &IdentStr,
     signers: &[AccountAddress],

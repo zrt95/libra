@@ -39,7 +39,7 @@ pub fn analyze_read_write_set(
         )
     }
     let modules = dep_graph.compute_topological_order()?;
-    let rw = read_write_set::analyze(modules)?;
+    let rw = read_write_set::analyze(modules)?.normalize(vec![]);
 
     let signer_addresses = signers
         .iter()
@@ -89,16 +89,10 @@ pub fn analyze_read_write_set(
         ConcretizeMode::Dont => {
             // don't try try to concretize; just print the R/W set
             // safe to unwrap here because every function must be analyzed
-            let results = rw.get_summary(&module_id, &fun_id).expect(
+            let results = rw.get_canonical_summary(&module_id, &fun_id).expect(
                 "Invariant violation: couldn't resolve R/W set summary for defined function",
             );
-            println!(
-                "{}",
-                results.display(
-                    &rw.get_function_env(&module_id, &fun_id)
-                        .expect("Invariant violation: couldn't find the env for defined function")
-                )
-            )
+            println!("{}", results)
         }
     }
     Ok(())
