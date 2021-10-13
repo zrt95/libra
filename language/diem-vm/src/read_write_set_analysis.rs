@@ -21,6 +21,7 @@ use move_core_types::{
     transaction_argument::convert_txn_args,
     value::{serialize_values, MoveValue},
 };
+use move_binary_format::layout::ModuleCache;
 use read_write_set_dynamic::NormalizedReadWriteSetAnalysis;
 use std::ops::Deref;
 
@@ -53,10 +54,10 @@ impl<'a> ReadWriteSetAnalysis<'a> {
     /// by `tx` if executed in state `blockchain_view`.
     /// Note: this will return both writes performed by the transaction prologue/epilogue and by its
     /// embedded payload.
-    pub fn get_keys_written(
+    pub fn get_keys_written<R: MoveResolver>(
         &self,
         tx: &SignedTransaction,
-        blockchain_view: &impl MoveResolver,
+        blockchain_view: &ModuleCache<R>,
     ) -> Result<Vec<ResourceKey>> {
         Ok(self
             .get_concretized_keys_user_transaction(tx, blockchain_view)?
@@ -67,20 +68,20 @@ impl<'a> ReadWriteSetAnalysis<'a> {
     /// by `tx` if executed in state `blockchain_view`.
     /// Note: this will return both reads performed by the transaction prologue/epilogue and by its
     /// embedded payload.
-    pub fn get_keys_read(
+    pub fn get_keys_read<R: MoveResolver>(
         &self,
         tx: &SignedTransaction,
-        blockchain_view: &impl MoveResolver,
+        blockchain_view: &ModuleCache<R>,
     ) -> Result<Vec<ResourceKey>> {
         Ok(self
             .get_concretized_keys_user_transaction(tx, blockchain_view)?
             .0)
     }
 
-    pub fn get_concretized_keys_user_transaction(
+    pub fn get_concretized_keys_user_transaction<R: MoveResolver>(
         &self,
         tx: &SignedTransaction,
-        blockchain_view: &impl MoveResolver,
+        blockchain_view: &ModuleCache<R>,
     ) -> Result<(Vec<ResourceKey>, Vec<ResourceKey>)> {
         match tx.payload() {
             TransactionPayload::ScriptFunction(s) => self.get_concretized_keys_script_function(
@@ -113,10 +114,10 @@ impl<'a> ReadWriteSetAnalysis<'a> {
         }
     }
 
-    pub fn get_concretized_keys_tx(
+    pub fn get_concretized_keys_tx<R: MoveResolver>(
         &self,
         tx: &PreprocessedTransaction,
-        blockchain_view: &impl MoveResolver,
+        blockchain_view: &ModuleCache<R>,
     ) -> Result<(Vec<ResourceKey>, Vec<ResourceKey>)> {
         match tx {
             PreprocessedTransaction::UserTransaction(tx) => {
@@ -156,14 +157,14 @@ impl<'a> ReadWriteSetAnalysis<'a> {
         }
     }
 
-    fn get_concretized_keys_script_function(
+    fn get_concretized_keys_script_function<R: MoveResolver>(
         &self,
         tx: &SignedTransaction,
         module_name: &ModuleId,
         script_name: &IdentStr,
         actuals: &[Vec<u8>],
         type_actuals: &[TypeTag],
-        blockchain_view: &impl MoveResolver,
+        blockchain_view: &ModuleCache<R>,
     ) -> Result<(Vec<ResourceKey>, Vec<ResourceKey>)> {
         let signers = vec![tx.sender()];
         let gas_currency = account_config::type_tag_for_currency_code(

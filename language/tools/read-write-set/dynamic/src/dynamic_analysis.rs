@@ -3,7 +3,7 @@
 
 use anyhow::{anyhow, bail, Result};
 use move_binary_format::{
-    layout::{ModuleCache, TypeLayoutBuilder},
+    layout::{ModuleCache, TypeLayoutBuilder, GetModule},
     normalized::{Function, Type},
     CompiledModule,
 };
@@ -19,6 +19,7 @@ use std::{
     fmt::{self, Formatter},
     ops::Deref,
 };
+use move_core_types::resolver::ModuleResolver;
 
 /// A read/write set state with no unbound formals or type variables
 #[derive(Debug)]
@@ -45,7 +46,7 @@ impl ConcretizedFormals {
     /// example: if `self` is 0x7/0x1::AModule::AResource/addr_field/0x2::M2::R/f -> Write and the
     /// value of 0x7/0x1::AModule::AResource/addr_field is 0xA in `blockchain_view`, this will
     /// return { 0x7/0x1::AModule::AResource/addr_field -> Read, 0xA/0x2::M2::R/f -> Write }
-    fn concretize_secondary_indexes<R: MoveResolver>(
+    pub fn concretize_secondary_indexes<R: MoveResolver>(
         self,
         blockchain_view: &R,
     ) -> Option<ConcretizedSecondaryIndexes> {
@@ -238,29 +239,25 @@ impl ConcretizedFormals {
 }
 
 /// Bind all formals and type variables in `accesses` using `signers`, `actuals`, and
-/// `type_actuals`. In addition, concretize all secondary indexes in `accesses` against the state in
-/// `blockchain_view`.
-pub fn concretize(
+/// `type_actuals`.
+pub fn concretize<R: MoveResolver>(
     accesses: &ReadWriteSet,
     module: &ModuleId,
     fun: &IdentStr,
     signers: &[AccountAddress],
     actuals: &[Vec<u8>],
     type_actuals: &[TypeTag],
-    blockchain_view: &impl MoveResolver,
-) -> Result<ConcretizedSecondaryIndexes> {
+    module_cache: &ModuleCache<R>,
+) -> Result<ConcretizedFormals> {
     let subst_map = type_actuals
         .iter()
         .map(|ty| Type::from(ty.clone()))
         .collect::<Vec<_>>();
 
-    let compiled_module = CompiledModule::deserialize(
-        &blockchain_view
-            .get_module(module)
+    let compiled_module = module_cache
+            .get_module_by_id(module)
             .map_err(|_| anyhow!("Failed to get module from storage"))?
-            .ok_or_else(|| anyhow!("Failed to get module"))?,
-    )
-    .map_err(|_| anyhow!("Failed to deserialize module"))?;
+            .ok_or_else(|| anyhow!("Failed to get module"))?;
 
     let func_type = Function::new_from_name(&compiled_module, fun)
         .ok_or_else(|| anyhow!("Failed to find function"))?
@@ -269,17 +266,13 @@ pub fn concretize(
         .map(|ty| ty.subst(&subst_map).into_type_tag())
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| anyhow!("Failed to substitute types"))?;
-    let concretized_formals = ConcretizedFormals::from_args(
+    ConcretizedFormals::from_args(
         accesses,
         signers,
         actuals,
         func_type.as_slice(),
         type_actuals,
-    )?;
-
-    concretized_formals
-        .concretize_secondary_indexes(blockchain_view)
-        .ok_or_else(|| anyhow!("Failed to concretize secondary index"))
+    )
 }
 
 impl Deref for ConcretizedFormals {

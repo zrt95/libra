@@ -1,7 +1,7 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::dynamic_analysis::{concretize, ConcretizedSecondaryIndexes};
+use crate::dynamic_analysis::{concretize, ConcretizedSecondaryIndexes, ConcretizedFormals};
 use anyhow::{anyhow, bail, Result};
 use move_core_types::{
     account_address::AccountAddress,
@@ -9,6 +9,7 @@ use move_core_types::{
     language_storage::{ModuleId, ResourceKey, TypeTag},
     resolver::MoveResolver,
 };
+use move_binary_format::layout::ModuleCache;
 use read_write_set_types::ReadWriteSet;
 use std::collections::BTreeMap;
 
@@ -26,14 +27,14 @@ impl NormalizedReadWriteSetAnalysis {
     /// Returns an overapproximation of the `ResourceKey`'s in global storage that will be written
     /// by `module::fun` if called with arguments `signers`, `actuals`, `type_actuals` in state
     /// `blockchain_view`.
-    pub fn get_keys_written(
+    pub fn get_keys_written<R: MoveResolver>(
         &self,
         module: &ModuleId,
         fun: &IdentStr,
         signers: &[AccountAddress],
         actuals: &[Vec<u8>],
         type_actuals: &[TypeTag],
-        blockchain_view: &impl MoveResolver,
+        blockchain_view: &ModuleCache<R>,
     ) -> Result<Vec<ResourceKey>> {
         self.get_concretized_keys(
             module,
@@ -49,14 +50,14 @@ impl NormalizedReadWriteSetAnalysis {
     /// Returns an overapproximation of the `ResourceKey`'s in global storage that will be read by
     /// `module::fun` if called with arguments `signers`, `actuals`, `type_actuals` in state
     /// `blockchain_view`.
-    pub fn get_keys_read(
+    pub fn get_keys_read<R: MoveResolver>(
         &self,
         module: &ModuleId,
         fun: &IdentStr,
         signers: &[AccountAddress],
         actuals: &[Vec<u8>],
         type_actuals: &[TypeTag],
-        blockchain_view: &impl MoveResolver,
+        blockchain_view: &ModuleCache<R>,
     ) -> Result<Vec<ResourceKey>> {
         self.get_concretized_keys(
             module,
@@ -74,14 +75,14 @@ impl NormalizedReadWriteSetAnalysis {
     /// `blockchain_view`.
     /// If `is_write` is true, only ResourceKey's written will be returned; otherwise, only
     /// ResourceKey's read will be returned.
-    pub fn get_concretized_keys(
+    pub fn get_concretized_keys<R: MoveResolver>(
         &self,
         module: &ModuleId,
         fun: &IdentStr,
         signers: &[AccountAddress],
         actuals: &[Vec<u8>],
         type_actuals: &[TypeTag],
-        blockchain_view: &impl MoveResolver,
+        blockchain_view: &ModuleCache<R>,
         is_write: bool,
     ) -> Result<Vec<ResourceKey>> {
         if let Some(state) = self.get_summary(module, fun) {
@@ -111,15 +112,15 @@ impl NormalizedReadWriteSetAnalysis {
     /// Returns an overapproximation of the access paths in global storage that will be read/written
     /// by `module::fun` if called with arguments `signers`, `actuals`, `type_actuals` in state
     /// `blockchain_view`.
-    pub fn get_concretized_summary(
+    pub fn get_concretized_summary<R: MoveResolver>(
         &self,
         module: &ModuleId,
         fun: &IdentStr,
         signers: &[AccountAddress],
         actuals: &[Vec<u8>],
         type_actuals: &[TypeTag],
-        blockchain_view: &impl MoveResolver,
-    ) -> Result<ConcretizedSecondaryIndexes> {
+        blockchain_view: &ModuleCache<R>,
+    ) -> Result<ConcretizedFormals> {
         let state = self
             .get_summary(module, fun)
             .ok_or_else(|| anyhow!("Function {}::{} to found", module, fun))?;

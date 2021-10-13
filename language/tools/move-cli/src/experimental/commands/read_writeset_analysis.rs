@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::sandbox::utils::on_disk_state_view::OnDiskStateView;
-use move_binary_format::file_format::CompiledModule;
+use move_binary_format::{
+    file_format::CompiledModule,
+    layout::ModuleCache,
+};
 use move_bytecode_utils::Modules;
 use move_core_types::{
     account_address::AccountAddress,
@@ -25,6 +28,7 @@ pub fn analyze_read_write_set(
     concretize: ConcretizeMode,
     verbose: bool,
 ) -> Result<()> {
+    let module_cache = ModuleCache::new(state);
     let module_id = CompiledModule::deserialize(&fs::read(module_file)?)
         .map_err(|e| anyhow!("Error deserializing module: {:?}", e))?
         .self_id();
@@ -57,7 +61,7 @@ pub fn analyze_read_write_set(
                 &signer_addresses,
                 &script_args,
                 type_args,
-                state,
+                &module_cache,
             )?;
             println!("{}", results)
         }
@@ -68,7 +72,7 @@ pub fn analyze_read_write_set(
                 &signer_addresses,
                 &script_args,
                 type_args,
-                state,
+                &module_cache,
             )?;
             for key in results {
                 println!("{}", key)
@@ -81,7 +85,7 @@ pub fn analyze_read_write_set(
                 &signer_addresses,
                 &script_args,
                 type_args,
-                state,
+                &module_cache,
             )?;
             for key in results {
                 println!("{}", key)
