@@ -2934,6 +2934,7 @@ dependencies = [
  "hex",
  "move-binary-format",
  "move-core-types",
+ "move-ir-compiler",
  "move-lang",
  "move-vm-runtime",
  "move-vm-test-utils",
