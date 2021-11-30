@@ -131,7 +131,7 @@ where
 
         scope(|s| {
             // How many threads to use?
-            let compute_cpus = min(1 + (num_txns / 50), self.num_cpus - 1); // Ensure we have at least 50 tx per thread.
+            let compute_cpus = min(1 + (num_txns / 50), self.num_cpus); // Ensure we have at least 50 tx per thread.
             let compute_cpus = min(num_txns / max_dependency_level, compute_cpus); // Ensure we do not higher rate of conflict than concurrency.
 
             for _ in 0..(compute_cpus) {
